@@ -2,14 +2,44 @@
 //  Account.swift
 //  AllMyTokens
 //
-//  A connected Claude account. Tokens live in the Keychain keyed by `id`; this
-//  lightweight record (id + display name) is persisted in UserDefaults so the
-//  app knows which accounts exist across launches.
+//  A connected subscription account (Claude or Codex). Tokens live in the
+//  Keychain keyed by `id`; this lightweight record (id + display name +
+//  provider) is persisted in UserDefaults so the app knows which accounts
+//  exist across launches.
 //
 
 import Foundation
 
+enum AccountProvider: String, Codable, Sendable {
+    case claude
+    case codex
+
+    var displayName: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        }
+    }
+}
+
 struct Account: Identifiable, Codable, Equatable, Hashable {
     let id: String
     var name: String
+    var provider: AccountProvider
+
+    init(id: String, name: String, provider: AccountProvider = .claude) {
+        self.id = id
+        self.name = name
+        self.provider = provider
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, provider }
+
+    /// Records saved before multi-provider support have no `provider` key.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        provider = try container.decodeIfPresent(AccountProvider.self, forKey: .provider) ?? .claude
+    }
 }

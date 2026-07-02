@@ -29,14 +29,14 @@ final class UsageStore {
     private(set) var isRefreshing = false
     private(set) var lastRefresh: Date?
 
-    /// The in-progress PKCE login for the "Add account" sheet.
+    /// The in-progress login's authorize URL for the "Add account" sheet.
     private(set) var pendingLoginURL: URL?
     /// Error surfaced in the add-account flow.
     var addError: String?
 
     let settings: Settings
 
-    private var pendingLogin: AnthropicAuth.PendingLogin?
+    private var pendingLogin: (provider: any UsageProvider, login: ProviderLogin)?
     private var loopTask: Task<Void, Never>?
     private let accountsKey = "accounts.v1"
 
@@ -71,36 +71,18 @@ final class UsageStore {
 
     // MARK: - Accounts
 
-    func beginLogin() {
-        addError = nil
-        let pending = AnthropicAuth.makePendingLogin()
-        pendingLogin = pending
-        pendingLoginURL = pending.authorizeURL
-        NSWorkspace.shared.open(pending.authorizeURL)
-    }
-
-    func cancelLogin() {
-        pendingLogin = nil
-        pendingLoginURL = nil
-        addError = nil
-    }
-
-    /// Exchanges the pasted code for tokens, adds the account, refreshes it.
-    /// Returns true on success so the add-account sheet can dismiss.
+    /// Starts a provider's OAuth flow and opens the browser. Returns false
+    /// (with addError set) when the login couldn't start (e.g. the loopback
+    /// port is busy).
     @discardableResult
-    func completeLogin(code: String) async -> Bool {
-        guard let pending = pendingLogin else {
-            addError = "Press “Sign in with Claude” first."
-            return false
-        }
+    func beginLogin(provider providerID: AccountProvider) -> Bool {
+        cancelLogin()
+        let provider = ProviderRegistry.provider(for: providerID)
         do {
-            let id = try await AnthropicAuth.completeLogin(code: code, pending: pending)
-            accounts.append(Account(id: id, name: defaultAccountName()))
-            persistAccounts()
-            pendingLogin = nil
-            pendingLoginURL = nil
-            addError = nil
-            await refreshAll()
+            let login = try provider.beginLogin()
+            pendingLogin = (provider, login)
+            pendingLoginURL = login.authorizeURL
+            NSWorkspace.shared.open(login.authorizeURL)
             return true
         } catch {
             addError = error.localizedDescription
@@ -108,8 +90,40 @@ final class UsageStore {
         }
     }
 
+    func cancelLogin() {
+        if let pending = pendingLogin { pending.provider.cancelLogin(pending.login) }
+        pendingLogin = nil
+        pendingLoginURL = nil
+        addError = nil
+    }
+
+    /// Completes the pending login (passing the pasted code where the provider
+    /// needs one) and adds the account. Returns true on success so the
+    /// add-account sheet can dismiss; false silently when the wait was
+    /// cancelled (e.g. the user pressed Back).
+    @discardableResult
+    func completeLogin(code: String? = nil) async -> Bool {
+        guard let (provider, login) = pendingLogin else { return false }
+        do {
+            let id = try await provider.completeLogin(login, code: code)
+            accounts.append(Account(id: id, name: defaultAccountName(for: provider.id),
+                                    provider: provider.id))
+            persistAccounts()
+            pendingLogin = nil
+            pendingLoginURL = nil
+            addError = nil
+            await refreshAll()
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            addError = error.localizedDescription
+            return false
+        }
+    }
+
     func signOut(_ account: Account) {
-        AnthropicAuth.clear(for: account.id)
+        ProviderRegistry.provider(for: account.provider).signOut(accountID: account.id)
         accounts.removeAll { $0.id == account.id }
         usage[account.id] = nil
         errors[account.id] = nil
@@ -131,8 +145,9 @@ final class UsageStore {
         publish()
     }
 
-    private func defaultAccountName() -> String {
-        "Claude Account \(accounts.count + 1)"
+    private func defaultAccountName(for provider: AccountProvider) -> String {
+        let sameProvider = accounts.filter { $0.provider == provider }.count
+        return "\(provider.displayName) Account \(sameProvider + 1)"
     }
 
     private func loadAccounts() {
@@ -162,9 +177,7 @@ final class UsageStore {
             for account in list {
                 group.addTask {
                     do {
-                        guard let token = try await AnthropicAuth.validAccessToken(for: account.id),
-                              !token.isEmpty else { throw AnthropicUsageClient.UsageError.notAuthorized }
-                        let reading = try await AnthropicUsageClient.fetch(accessToken: token)
+                        let reading = try await Self.fetchReading(for: account)
                         return (account.id, .success(Self.snapshot(from: reading)))
                     } catch {
                         return (account.id, .failure(error))
@@ -187,6 +200,13 @@ final class UsageStore {
         }
         lastRefresh = Date()
         publish()
+    }
+
+    /// Fetches one account's usage via its provider implementation.
+    /// `nonisolated static` so it can run inside the concurrent fetch tasks.
+    nonisolated private static func fetchReading(for account: Account) async throws -> UsageReading {
+        try await ProviderRegistry.provider(for: account.provider)
+            .fetchUsage(accountID: account.id)
     }
 
     /// Pure transform from a header reading to a snapshot. `nonisolated static`
@@ -212,7 +232,10 @@ final class UsageStore {
 
     private func accountUsageList() -> [AccountUsage] {
         accounts.compactMap { account in
-            usage[account.id].map { AccountUsage(id: account.id, name: account.name, snapshot: $0) }
+            usage[account.id].map {
+                AccountUsage(id: account.id, name: account.name,
+                             provider: account.provider.rawValue, snapshot: $0)
+            }
         }
     }
 
@@ -231,26 +254,41 @@ final class UsageStore {
             .requestAuthorization(options: [.alert, .sound, .badge])
     }
 
-    /// Rebuilds reset notifications for the current usage. Reads the per-type
+    /// Rebuilds reset notifications for the current usage. Reads each account's
     /// toggles from shared App Group defaults (so the widget's bell stays
-    /// authoritative even if the app's in-memory mirror is momentarily stale).
+    /// authoritative even if the app was inactive when it was toggled).
     func rescheduleNotifications() {
         scheduleNotifications(for: accountUsageList())
+    }
+
+    // MARK: Per-account notification preferences
+
+    func notifySession(for account: Account) -> Bool { AppGroup.notifySession(for: account.id) }
+    func notifyWeekly(for account: Account) -> Bool { AppGroup.notifyWeekly(for: account.id) }
+
+    func setNotifySession(_ on: Bool, for account: Account) {
+        AppGroup.setNotifySession(on, for: account.id)
+        rescheduleNotifications()
+        // The widget's bell reflects this flag.
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    func setNotifyWeekly(_ on: Bool, for account: Account) {
+        AppGroup.setNotifyWeekly(on, for: account.id)
+        rescheduleNotifications()
     }
 
     private func scheduleNotifications(for list: [AccountUsage]) {
         let center = UNUserNotificationCenter.current()
         center.removeAllPendingNotificationRequests()
 
-        let notifySession = AppGroup.notifySession
-        let notifyWeekly = AppGroup.notifyWeekly
-        guard notifySession || notifyWeekly else { return }
-
         // Prefix account name only when there's more than one account.
         let showNames = list.count > 1
         for entry in list {
             let snap = entry.snapshot
             let prefix = showNames ? "\(entry.name): " : ""
+            let notifySession = AppGroup.notifySession(for: entry.id)
+            let notifyWeekly = AppGroup.notifyWeekly(for: entry.id)
 
             if notifySession {
                 schedule(id: "reset.\(entry.id).session",

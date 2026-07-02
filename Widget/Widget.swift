@@ -34,9 +34,11 @@ struct Provider: AppIntentTimelineProvider {
             .flatMap { sel in accounts.first(where: { $0.id == sel.id }) } ?? accounts.first
         return SimpleEntry(date: Date(),
                            snapshot: selected?.snapshot,
+                           accountID: selected?.id,
                            accountName: selected?.name,
+                           provider: selected?.provider ?? "claude",
                            accountCount: accounts.count,
-                           notifySession: AppGroup.notifySession,
+                           notifySession: selected.map { AppGroup.notifySession(for: $0.id) } ?? true,
                            configuration: configuration)
     }
 }
@@ -44,35 +46,94 @@ struct Provider: AppIntentTimelineProvider {
 struct SimpleEntry: TimelineEntry {
     let date: Date
     let snapshot: UsageSnapshot?
+    let accountID: String?
     let accountName: String?
+    let provider: String
     let accountCount: Int
     let notifySession: Bool
     let configuration: ConfigurationAppIntent
 }
 
-// MARK: - Palette
+// MARK: - Palette / themes
 
-private enum Palette {
-    static let lime = Color(red: 0.72, green: 0.86, blue: 0.30)
-    static let warn = Color(red: 0.96, green: 0.60, blue: 0.26)
-    static let over = Color(red: 0.93, green: 0.35, blue: 0.34)
-    static let mascot = Color(red: 0.83, green: 0.47, blue: 0.40)
+/// Themable palette, resolved from the widget's configured theme. The Claude
+/// brand coral is fixed across themes.
+private struct Palette {
+    static let claude = Color(red: 0.85, green: 0.47, blue: 0.34)
+    static let codex = Color(red: 0.45, green: 0.67, blue: 0.61)
 
-    static let title = Color.white
-    static let secondary = Color.white.opacity(0.45)
-    static let cardFill = Color.white.opacity(0.06)
-    static let track = Color.white.opacity(0.12)
-    static let pill = Color.white.opacity(0.10)
+    let title: Color
+    let secondary: Color
+    let cardFill: Color
+    let track: Color
+    let pill: Color
+    let lime: Color
+    let warn: Color
+    let over: Color
 
-    static let background = LinearGradient(
-        colors: [Color(red: 0.12, green: 0.12, blue: 0.13), Color(red: 0.04, green: 0.04, blue: 0.05)],
-        startPoint: .top, endPoint: .bottom
-    )
-
-    static func bar(_ fraction: Double) -> Color {
+    func bar(_ fraction: Double) -> Color {
         if fraction >= 1 { return over }
         if fraction >= 0.8 { return warn }
         return lime
+    }
+
+    static func resolve(_ theme: WidgetTheme) -> Palette {
+        switch theme {
+        case .dark: return .dark
+        case .light: return .light
+        }
+    }
+
+    static let dark = Palette(
+        title: .white,
+        secondary: .white.opacity(0.45),
+        cardFill: .white.opacity(0.06),
+        track: .white.opacity(0.12),
+        pill: .white.opacity(0.10),
+        lime: Color(red: 0.72, green: 0.86, blue: 0.30),
+        warn: Color(red: 0.96, green: 0.60, blue: 0.26),
+        over: Color(red: 0.93, green: 0.35, blue: 0.34)
+    )
+
+    static let light = Palette(
+        title: Color(red: 0.11, green: 0.11, blue: 0.13),
+        secondary: .black.opacity(0.48),
+        cardFill: .black.opacity(0.05),
+        track: .black.opacity(0.10),
+        pill: .black.opacity(0.07),
+        lime: Color(red: 0.52, green: 0.70, blue: 0.14),
+        warn: Color(red: 0.90, green: 0.52, blue: 0.13),
+        over: Color(red: 0.85, green: 0.25, blue: 0.24)
+    )
+
+}
+
+private struct PaletteKey: EnvironmentKey {
+    static let defaultValue = Palette.dark
+}
+
+extension EnvironmentValues {
+    fileprivate var palette: Palette {
+        get { self[PaletteKey.self] }
+        set { self[PaletteKey.self] = newValue }
+    }
+}
+
+/// Container background per theme.
+private struct WidgetBackground: View {
+    let theme: WidgetTheme
+
+    var body: some View {
+        switch theme {
+        case .dark:
+            LinearGradient(
+                colors: [Color(red: 0.12, green: 0.12, blue: 0.13), Color(red: 0.04, green: 0.04, blue: 0.05)],
+                startPoint: .top, endPoint: .bottom)
+        case .light:
+            LinearGradient(
+                colors: [Color(red: 0.97, green: 0.97, blue: 0.98), Color(red: 0.89, green: 0.89, blue: 0.92)],
+                startPoint: .top, endPoint: .bottom)
+        }
     }
 }
 
@@ -95,16 +156,40 @@ private func metrics(from snap: UsageSnapshot) -> [WidgetMetric] {
     return result
 }
 
-/// Compact "2h 5m" / "2d 5h" / "5m" remaining string.
-private func compactRemaining(from now: Date, to date: Date) -> String {
+/// "Resets in 2h 5m" / "Resets in 2d 5h" / "Resets in 5m", or "Resets now"
+/// once the reset time has arrived.
+private func resetLabel(from now: Date, to date: Date) -> String {
     let total = Int(max(0, date.timeIntervalSince(now)))
-    if total < 60 { return "now" }
+    if total < 60 { return "Resets now" }
     let days = total / 86_400
     let hours = (total % 86_400) / 3600
     let mins = (total % 3600) / 60
-    if days >= 1 { return "\(days)d \(hours)h" }
-    if hours >= 1 { return "\(hours)h \(mins)m" }
-    return "\(mins)m"
+    if days >= 1 { return "Resets in \(days)d \(hours)h" }
+    if hours >= 1 { return "Resets in \(hours)h \(mins)m" }
+    return "Resets in \(mins)m"
+}
+
+/// The account's provider mark — Claude's spark on coral, or the OpenAI knot
+/// on teal for Codex accounts.
+private struct ProviderIcon: View {
+    var provider: String = "claude"
+    var size: CGFloat
+
+    private var isCodex: Bool { provider == "codex" }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: size * 0.23, style: .continuous)
+            .fill(isCodex ? Palette.codex : Palette.claude)
+            .frame(width: size, height: size)
+            .overlay(
+                Image(isCodex ? "BrandOpenAI" : "BrandClaude")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size * (isCodex ? 0.72 : 0.6),
+                           height: size * (isCodex ? 0.72 : 0.6))
+                    .foregroundStyle(.white)
+            )
+    }
 }
 
 // MARK: - Entry view
@@ -112,6 +197,8 @@ private func compactRemaining(from now: Date, to date: Date) -> String {
 struct WidgetEntryView: View {
     @Environment(\.widgetFamily) private var family
     var entry: Provider.Entry
+
+    private var palette: Palette { Palette.resolve(entry.configuration.theme) }
 
     var body: some View {
         Group {
@@ -121,7 +208,8 @@ struct WidgetEntryView: View {
                 emptyState
             }
         }
-        .foregroundStyle(Palette.title)
+        .foregroundStyle(palette.title)
+        .environment(\.palette, palette)
     }
 
     @ViewBuilder
@@ -130,17 +218,20 @@ struct WidgetEntryView: View {
         switch family {
         case .systemSmall:
             SmallView(metric: focusMetric(all), now: entry.date,
-                      notifyOn: entry.notifySession, accountName: accountSubtitle)
+                      notifyOn: entry.notifySession, accountID: entry.accountID,
+                      accountName: accountSubtitle, provider: entry.provider)
         case .systemMedium:
             VStack(alignment: .leading, spacing: 10) {
-                HeaderView(subtitle: accountSubtitle, notifyOn: entry.notifySession)
+                HeaderView(subtitle: accountSubtitle, notifyOn: entry.notifySession,
+                           accountID: entry.accountID, provider: entry.provider)
                 HStack(spacing: 10) {
                     ForEach(Array(all.prefix(2))) { MetricCard(metric: $0, now: entry.date) }
                 }
             }
         default: // large
             VStack(alignment: .leading, spacing: 10) {
-                HeaderView(subtitle: accountSubtitle, notifyOn: entry.notifySession)
+                HeaderView(subtitle: accountSubtitle, notifyOn: entry.notifySession,
+                           accountID: entry.accountID, provider: entry.provider)
                 ForEach(Array(all.prefix(3))) { MetricCard(metric: $0, now: entry.date) }
                 Spacer(minLength: 0)
                 FooterView(snapshot: snap, metrics: all, now: entry.date)
@@ -163,12 +254,10 @@ struct WidgetEntryView: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: "ladybug.fill")
-                .font(.title)
-                .foregroundStyle(Palette.mascot)
+            ProviderIcon(size: 32)
             Text("Open AllMyTokens\nto sign in")
                 .font(.caption)
-                .foregroundStyle(Palette.secondary)
+                .foregroundStyle(palette.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -178,46 +267,50 @@ struct WidgetEntryView: View {
 // MARK: - Header / footer
 
 private struct HeaderView: View {
+    @Environment(\.palette) private var palette
     var subtitle: String? = nil
     var notifyOn: Bool
+    var accountID: String?
+    var provider: String = "claude"
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "ladybug.fill")
-                .font(.system(size: 18))
-                .foregroundStyle(Palette.mascot)
+            ProviderIcon(provider: provider, size: 26)
             VStack(alignment: .leading, spacing: 0) {
-                Text("Usage")
+                Text("Token usage")
                     .font(.system(.title2, design: .serif).weight(.semibold))
                 if let subtitle {
                     Text(subtitle)
                         .font(.caption2)
-                        .foregroundStyle(Palette.secondary)
+                        .foregroundStyle(palette.secondary)
                         .lineLimit(1)
                 }
             }
             Spacer()
-            NotifyBellButton(on: notifyOn)
+            NotifyBellButton(on: notifyOn, accountID: accountID)
         }
     }
 }
 
-/// Interactive bell that toggles session-reset notifications from the widget.
+/// Interactive bell that toggles this account's session-reset notifications.
 private struct NotifyBellButton: View {
+    @Environment(\.palette) private var palette
     let on: Bool
+    let accountID: String?
     var body: some View {
-        Button(intent: ToggleSessionNotifyIntent()) {
+        Button(intent: ToggleSessionNotifyIntent(accountID: accountID ?? "")) {
             Image(systemName: on ? "bell.fill" : "bell.slash.fill")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(on ? Palette.lime : Palette.secondary)
+                .foregroundStyle(on ? palette.lime : palette.secondary)
                 .padding(6)
-                .background(Circle().fill(Palette.pill))
+                .background(Circle().fill(palette.pill))
         }
         .buttonStyle(.plain)
     }
 }
 
 private struct FooterView: View {
+    @Environment(\.palette) private var palette
     let snapshot: UsageSnapshot
     let metrics: [WidgetMetric]
     let now: Date
@@ -235,18 +328,19 @@ private struct FooterView: View {
 
     private func state(peak: Double) -> (String, String, Color) {
         if snapshot.status == "rejected" || peak >= 1 {
-            return ("exclamationmark.triangle.fill", "Limit reached", Palette.over)
+            return ("exclamationmark.triangle.fill", "Limit reached", palette.over)
         }
         if snapshot.status == "allowed_warning" || peak >= 0.8 {
-            return ("bolt.fill", "Approaching limit", Palette.warn)
+            return ("bolt.fill", "Approaching limit", palette.warn)
         }
-        return ("sparkle", "Updated \(now.formatted(.relative(presentation: .named)))", Palette.secondary)
+        return ("sparkle", "Updated \(now.formatted(.relative(presentation: .named)))", palette.secondary)
     }
 }
 
 // MARK: - Cards
 
 private struct MetricCard: View {
+    @Environment(\.palette) private var palette
     let metric: WidgetMetric
     let now: Date
 
@@ -262,42 +356,43 @@ private struct MetricCard: View {
                 PillLabel(text: metric.label)
             }
             UsageBar(fraction: metric.fraction)
-            Text("Resets in \(compactRemaining(from: now, to: metric.resetAt))")
+            Text(resetLabel(from: now, to: metric.resetAt))
                 .font(.caption)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .foregroundStyle(Palette.secondary)
+                .foregroundStyle(palette.secondary)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.cardFill))
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(palette.cardFill))
     }
 }
 
 private struct SmallView: View {
+    @Environment(\.palette) private var palette
     let metric: WidgetMetric
     let now: Date
     let notifyOn: Bool
+    var accountID: String? = nil
     var accountName: String? = nil
+    var provider: String = "claude"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: "ladybug.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Palette.mascot)
+                ProviderIcon(provider: provider, size: 18)
                 VStack(alignment: .leading, spacing: -1) {
                     Text("Usage")
                         .font(.system(.subheadline, design: .serif).weight(.semibold))
                     if let accountName {
                         Text(accountName)
                             .font(.system(size: 9))
-                            .foregroundStyle(Palette.secondary)
+                            .foregroundStyle(palette.secondary)
                             .lineLimit(1)
                     }
                 }
                 Spacer()
-                NotifyBellButton(on: notifyOn)
+                NotifyBellButton(on: notifyOn, accountID: accountID)
             }
             Spacer(minLength: 0)
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -310,38 +405,40 @@ private struct SmallView: View {
                 PillLabel(text: metric.label)
             }
             UsageBar(fraction: metric.fraction)
-            Text("Resets in \(compactRemaining(from: now, to: metric.resetAt))")
+            Text(resetLabel(from: now, to: metric.resetAt))
                 .font(.caption2)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .foregroundStyle(Palette.secondary)
+                .foregroundStyle(palette.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 }
 
 private struct PillLabel: View {
+    @Environment(\.palette) private var palette
     let text: String
     var body: some View {
         Text(text)
             .font(.caption.weight(.medium))
             .lineLimit(1)
             .fixedSize()
-            .foregroundStyle(Palette.title.opacity(0.85))
+            .foregroundStyle(palette.title.opacity(0.85))
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
-            .background(Capsule().fill(Palette.pill))
+            .background(Capsule().fill(palette.pill))
     }
 }
 
 private struct UsageBar: View {
+    @Environment(\.palette) private var palette
     let fraction: Double
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(Palette.track)
+                Capsule().fill(palette.track)
                 Capsule()
-                    .fill(Palette.bar(fraction))
+                    .fill(palette.bar(fraction))
                     .frame(width: max(4, geo.size.width * CGFloat(min(1, max(0, fraction)))))
             }
         }
@@ -357,10 +454,10 @@ struct AllMyTokensWidget: Widget {
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: kind, intent: ConfigurationAppIntent.self, provider: Provider()) { entry in
             WidgetEntryView(entry: entry)
-                .containerBackground(for: .widget) { Palette.background }
+                .containerBackground(for: .widget) { WidgetBackground(theme: entry.configuration.theme) }
         }
-        .configurationDisplayName("Claude Usage")
-        .description("Your Claude session, weekly and model limits, with reset times.")
+        .configurationDisplayName("AllMyTokens")
+        .description("Your Claude or Codex session, weekly and model limits, with reset times.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -370,20 +467,35 @@ struct AllMyTokensWidget: Widget {
 #Preview("Large", as: .systemLarge) {
     AllMyTokensWidget()
 } timeline: {
-    SimpleEntry(date: Date(), snapshot: .placeholder, accountName: "Claude",
+    SimpleEntry(date: Date(), snapshot: .placeholder, accountID: "preview", accountName: "Claude", provider: "claude",
                 accountCount: 1, notifySession: true, configuration: ConfigurationAppIntent())
 }
 
 #Preview("Medium", as: .systemMedium) {
     AllMyTokensWidget()
 } timeline: {
-    SimpleEntry(date: Date(), snapshot: .placeholder, accountName: "Claude",
+    SimpleEntry(date: Date(), snapshot: .placeholder, accountID: "preview", accountName: "Claude", provider: "claude",
                 accountCount: 1, notifySession: true, configuration: ConfigurationAppIntent())
 }
 
 #Preview("Small", as: .systemSmall) {
     AllMyTokensWidget()
 } timeline: {
-    SimpleEntry(date: Date(), snapshot: .placeholder, accountName: "Claude",
+    SimpleEntry(date: Date(), snapshot: .placeholder, accountID: "preview", accountName: "Claude", provider: "claude",
                 accountCount: 1, notifySession: true, configuration: ConfigurationAppIntent())
+}
+
+private extension ConfigurationAppIntent {
+    static func themed(_ theme: WidgetTheme) -> ConfigurationAppIntent {
+        let intent = ConfigurationAppIntent()
+        intent.theme = theme
+        return intent
+    }
+}
+
+#Preview("Medium · Light", as: .systemMedium) {
+    AllMyTokensWidget()
+} timeline: {
+    SimpleEntry(date: Date(), snapshot: .placeholder, accountID: "preview", accountName: "Claude", provider: "claude",
+                accountCount: 1, notifySession: true, configuration: .themed(.light))
 }

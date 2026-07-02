@@ -8,16 +8,43 @@
 import WidgetKit
 import AppIntents
 
-/// Interactive widget button: flips whether session-reset notifications fire.
-/// The value lives in shared App Group defaults; the app reconciles the actual
-/// scheduled notifications on its next refresh / when it becomes active.
+/// Interactive widget button: flips whether session-reset notifications fire
+/// for the account the widget shows. The value lives in shared App Group
+/// defaults; the app reconciles the actual scheduled notifications on its next
+/// refresh / when it becomes active.
 struct ToggleSessionNotifyIntent: AppIntent {
     static var title: LocalizedStringResource { "Toggle session reset alerts" }
 
+    @Parameter(title: "Account ID")
+    var accountID: String
+
+    init() {}
+
+    init(accountID: String) {
+        self.accountID = accountID
+    }
+
     func perform() async throws -> some IntentResult {
-        AppGroup.notifySession.toggle()
-        WidgetCenter.shared.reloadAllTimelines()
+        if !accountID.isEmpty {
+            AppGroup.setNotifySession(!AppGroup.notifySession(for: accountID), for: accountID)
+            WidgetCenter.shared.reloadAllTimelines()
+        }
         return .result()
+    }
+}
+
+/// Visual style of a widget instance.
+enum WidgetTheme: String, AppEnum {
+    case dark
+    case light
+
+    static var typeDisplayRepresentation: TypeDisplayRepresentation { "Theme" }
+
+    static var caseDisplayRepresentations: [WidgetTheme: DisplayRepresentation] {
+        [
+            .dark: "Dark",
+            .light: "Light",
+        ]
     }
 }
 
@@ -72,7 +99,7 @@ struct AccountQuery: EntityQuery {
 
 struct ConfigurationAppIntent: WidgetConfigurationIntent {
     static var title: LocalizedStringResource { "AllMyTokens" }
-    static var description: IntentDescription { "Show a Claude account's usage and reset time." }
+    static var description: IntentDescription { "Show an account's usage and reset time." }
 
     /// Which account this widget instance displays. Nil → the first account.
     @Parameter(title: "Account")
@@ -81,4 +108,8 @@ struct ConfigurationAppIntent: WidgetConfigurationIntent {
     /// Which limit the small widget focuses on.
     @Parameter(title: "Small widget shows", default: .session)
     var metric: UsageMetric
+
+    /// Visual theme for this widget instance.
+    @Parameter(title: "Theme", default: .dark)
+    var theme: WidgetTheme
 }

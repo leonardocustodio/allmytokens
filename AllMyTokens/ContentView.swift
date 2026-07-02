@@ -31,10 +31,9 @@ struct ContentView: View {
         }
         .frame(width: 440)
         .onChange(of: scenePhase) { _, phase in
-            // The widget's bell may have changed the shared toggles while we were
-            // inactive — resync the UI and rebuild notifications to match.
+            // The widget's bell may have changed an account's toggle while we
+            // were inactive — rebuild notifications to match.
             if phase == .active {
-                store.settings.syncFromShared()
                 store.rescheduleNotifications()
             }
         }
@@ -60,7 +59,7 @@ struct ContentView: View {
             // The footer sits on the plain background, outside the rounded group —
             // exactly where macOS puts its "Add Account…" button.
             if store.accounts.isEmpty {
-                Text("Connect your Claude Pro/Max subscription. Uses OAuth — no API key, nothing leaves your Mac except the sign-in.")
+                Text("Connect your Claude or ChatGPT (Codex) subscription. Uses OAuth — no API key, nothing leaves your Mac except the sign-in.")
             } else {
                 HStack {
                     Spacer()
@@ -97,16 +96,9 @@ struct ContentView: View {
     private var settingsSections: some View {
         @Bindable var settings = store.settings
 
-        Section("Notifications") {
-            Toggle("Session reset alerts", isOn: $settings.notifySession)
-                .onChange(of: settings.notifySession) { store.rescheduleNotifications() }
-            Toggle("Weekly & model reset alerts", isOn: $settings.notifyWeekly)
-                .onChange(of: settings.notifyWeekly) { store.rescheduleNotifications() }
+        Section("General") {
             Stepper("Refresh every \(settings.refreshMinutes) min",
                     value: $settings.refreshMinutes, in: 1...60)
-        }
-
-        Section("General") {
             Toggle("Open at login (keep usage fresh)", isOn: $settings.openAtLogin)
             Button("Send test notification") { store.sendTestNotification() }
         }
@@ -121,7 +113,7 @@ struct AccountRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AccountAvatar(size: 30)
+            ProviderBadge(brand: account.provider.brand, size: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text(account.name)
                     .font(.body)
@@ -149,22 +141,61 @@ struct AccountRow: View {
     }
 }
 
+// MARK: - Provider branding
+
+/// The providers the app knows about, with their real brand marks
+/// (template SVGs in the asset catalog) and official colors.
+enum ProviderBrand {
+    case claude, codex
+
+    var assetName: String {
+        switch self {
+        case .claude: return "BrandClaude"
+        case .codex:  return "BrandOpenAI"
+        }
+    }
+}
+
+extension AccountProvider {
+    var brand: ProviderBrand { self == .codex ? .codex : .claude }
+}
+
+/// A rounded app-icon-style tile showing a provider's true brand mark.
+struct ProviderBadge: View {
+    let brand: ProviderBrand
+    var size: CGFloat = 30
+
+    // Official brand colors: Claude coral, ChatGPT teal.
+    private static let claudeCoral = Color(red: 0.85, green: 0.47, blue: 0.34)
+    private static let chatgptTeal = Color(red: 0.45, green: 0.67, blue: 0.61)
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: size * 0.23, style: .continuous)
+            .fill(brand == .codex ? Self.chatgptTeal : Self.claudeCoral)
+            .frame(width: size, height: size)
+            .overlay(glyph)
+    }
+
+    private var glyph: some View {
+        Image(brand.assetName)
+            .resizable()
+            .scaledToFit()
+            .frame(width: size * glyphScale, height: size * glyphScale)
+            .foregroundStyle(.white)
+    }
+
+    private var glyphScale: CGFloat {
+        brand == .codex ? 0.72 : 0.6
+    }
+}
+
 // MARK: - Account avatar
 
 struct AccountAvatar: View {
     var size: CGFloat = 30
 
     var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-            .fill(LinearGradient(
-                colors: [Color(red: 0.87, green: 0.49, blue: 0.33), Color(red: 0.72, green: 0.30, blue: 0.36)],
-                startPoint: .topLeading, endPoint: .bottomTrailing))
-            .frame(width: size, height: size)
-            .overlay(
-                Image(systemName: "sparkle")
-                    .font(.system(size: size * 0.5, weight: .semibold))
-                    .foregroundStyle(.white)
-            )
+        ProviderBadge(brand: .claude, size: size)
     }
 }
 
@@ -174,16 +205,20 @@ struct AddAccountSheet: View {
     @Environment(UsageStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
-    private enum Step { case chooseProvider, connectClaude }
+    private enum Step: Equatable { case chooseProvider, connect(AccountProvider) }
     @State private var step: Step = .chooseProvider
     @State private var code = ""
     @State private var isConnecting = false
+    @State private var redirectAttempt = 0
+    @State private var redirectFailed = false
 
     var body: some View {
         Group {
             switch step {
-            case .chooseProvider: providerChooser
-            case .connectClaude:  claudeConnect
+            case .chooseProvider:
+                providerChooser
+            case let .connect(providerID):
+                connectView(ProviderRegistry.provider(for: providerID))
             }
         }
         .frame(width: 420)
@@ -200,19 +235,23 @@ struct AddAccountSheet: View {
                     .font(.subheadline.weight(.semibold))
 
                 VStack(spacing: 0) {
-                    ProviderRow(name: "Claude", systemImage: "sparkle",
-                                tint: Color(red: 0.83, green: 0.47, blue: 0.40), available: true) {
-                        store.beginLogin()
-                        step = .connectClaude
+                    ForEach(ProviderRegistry.all.indices, id: \.self) { index in
+                        let provider = ProviderRegistry.all[index]
+                        if index > 0 { Divider().padding(.leading, 54) }
+                        ProviderRow(name: provider.displayName, brand: provider.id.brand) {
+                            if store.beginLogin(provider: provider.id) {
+                                step = .connect(provider.id)
+                            }
+                        }
                     }
-                    divider
-                    ProviderRow(name: "ChatGPT", systemImage: "bubble.left.and.bubble.right.fill",
-                                tint: Color(red: 0.10, green: 0.64, blue: 0.53), available: false) {}
-                    divider
-                    ProviderRow(name: "Gemini", systemImage: "sparkles",
-                                tint: Color(red: 0.26, green: 0.52, blue: 0.96), available: false) {}
                 }
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.quaternary))
+            }
+
+            if let error = store.addError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             HStack {
@@ -223,38 +262,29 @@ struct AddAccountSheet: View {
         .padding(20)
     }
 
-    private var divider: some View {
-        Divider().padding(.leading, 54)
-    }
+    // MARK: Step 2 — connect (layout driven by the provider's login style)
 
-    // MARK: Step 2 — connect Claude (OAuth paste)
-
-    private var claudeConnect: some View {
+    private func connectView(_ provider: any UsageProvider) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
-                AccountAvatar(size: 40)
+                ProviderBadge(brand: provider.id.brand, size: 40)
                 VStack(alignment: .leading) {
-                    Text("Connect Claude").font(.headline)
-                    Text("Sign in with your Pro/Max subscription")
+                    Text("Connect \(provider.displayName)").font(.headline)
+                    Text(provider.loginSubtitle)
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             }
 
             Divider()
 
-            Text("1. A browser window opened for you to approve access.\n2. Copy the code Anthropic shows and paste it below.")
+            Text(provider.loginInstructions)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack {
-                TextField("Authorization code", text: $code)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(connect)
-                if let url = store.pendingLoginURL {
-                    Link(destination: url) { Image(systemName: "arrow.clockwise") }
-                        .help("Reopen the sign-in page")
-                }
+            switch provider.loginStyle {
+            case .pasteCode: pasteCodeSection
+            case .browserRedirect: redirectSection
             }
 
             if let error = store.addError {
@@ -270,17 +300,63 @@ struct AddAccountSheet: View {
                     step = .chooseProvider
                 }
                 Spacer()
-                Button {
-                    connect()
-                } label: {
-                    if isConnecting { ProgressView().controlSize(.small) } else { Text("Connect") }
+                if provider.loginStyle == .pasteCode {
+                    Button {
+                        connect()
+                    } label: {
+                        if isConnecting { ProgressView().controlSize(.small) } else { Text("Connect") }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(code.trimmingCharacters(in: .whitespaces).isEmpty || isConnecting)
                 }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(code.trimmingCharacters(in: .whitespaces).isEmpty || isConnecting)
             }
         }
         .padding(20)
+    }
+
+    private var pasteCodeSection: some View {
+        HStack {
+            TextField("Authorization code", text: $code)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(connect)
+            if let url = store.pendingLoginURL {
+                Link(destination: url) { Image(systemName: "arrow.clockwise") }
+                    .help("Reopen the sign-in page")
+            }
+        }
+    }
+
+    private var redirectSection: some View {
+        HStack(spacing: 8) {
+            if redirectFailed {
+                Button("Try again") {
+                    if case let .connect(providerID) = step,
+                       store.beginLogin(provider: providerID) {
+                        redirectAttempt += 1
+                    }
+                }
+            } else {
+                ProgressView().controlSize(.small)
+                Text("Waiting for approval…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if !redirectFailed, let url = store.pendingLoginURL {
+                Link(destination: url) { Image(systemName: "arrow.clockwise") }
+                    .help("Reopen the sign-in page")
+            }
+        }
+        .task(id: redirectAttempt) {
+            redirectFailed = false
+            let ok = await store.completeLogin()
+            if ok {
+                dismiss()
+            } else if !Task.isCancelled {
+                redirectFailed = true
+            }
+        }
     }
 
     private func connect() {
@@ -298,44 +374,24 @@ struct AddAccountSheet: View {
 
 private struct ProviderRow: View {
     let name: String
-    let systemImage: String
-    let tint: Color
-    let available: Bool
+    let brand: ProviderBrand
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(tint.gradient)
-                    .frame(width: 30, height: 30)
-                    .overlay(
-                        Image(systemName: systemImage)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white)
-                    )
+                ProviderBadge(brand: brand)
                 Text(name).font(.body)
                 Spacer()
-                if available {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                } else {
-                    Text("Coming soon")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(.quaternary))
-                }
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .contentShape(Rectangle())
-            .opacity(available ? 1 : 0.55)
         }
         .buttonStyle(.plain)
-        .disabled(!available)
     }
 }
 
@@ -347,6 +403,8 @@ struct AccountDetailView: View {
     let account: Account
 
     @State private var draftName = ""
+    @State private var notifySession = true
+    @State private var notifyWeekly = true
 
     private var snapshot: UsageSnapshot? { store.usage[account.id] }
 
@@ -356,6 +414,13 @@ struct AccountDetailView: View {
             Section("Account") {
                 TextField("Name", text: $draftName)
                     .onSubmit { store.rename(account, to: draftName) }
+            }
+
+            Section("Notifications") {
+                Toggle("Session reset alerts", isOn: $notifySession)
+                    .onChange(of: notifySession) { store.setNotifySession(notifySession, for: account) }
+                Toggle("Weekly & model reset alerts", isOn: $notifyWeekly)
+                    .onChange(of: notifyWeekly) { store.setNotifyWeekly(notifyWeekly, for: account) }
             }
 
             if let snap = snapshot, snap.hasData {
@@ -395,7 +460,11 @@ struct AccountDetailView: View {
             Spacer(minLength: 0)
         }
         .navigationTitle(account.name)
-        .onAppear { draftName = account.name }
+        .onAppear {
+            draftName = account.name
+            notifySession = store.notifySession(for: account)
+            notifyWeekly = store.notifyWeekly(for: account)
+        }
     }
 
     // Destructive action outside the group, on the plain background (Apple style).
@@ -464,16 +533,11 @@ struct MenuContent: View {
 
             Divider()
 
-            if store.hasAccounts {
-                Button {
-                    Task { await store.refreshAll() }
-                } label: { Label("Refresh now", systemImage: "arrow.clockwise") }
-            }
             Button {
                 openWindow(id: "dashboard")
                 NSApp.activate(ignoringOtherApps: true)
-            } label: { Label(store.hasAccounts ? "Open dashboard" : "Connect an account", systemImage: "square.grid.2x2") }
-            Button { NSApp.terminate(nil) } label: { Label("Quit", systemImage: "power") }
+            } label: { Text(store.hasAccounts ? "Settings" : "Connect an account") }
+            Button { NSApp.terminate(nil) } label: { Text("Quit") }
         }
         .buttonStyle(.plain)
         .padding(12)
@@ -487,10 +551,10 @@ struct MenuContent: View {
                 Text(account.name).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             }
             if let snap = store.usage[account.id], snap.hasData {
-                miniBar("Session", fraction: snap.sessionFraction, tint: .blue)
-                miniBar("Weekly", fraction: snap.weeklyFraction, tint: .purple)
+                miniBar("Session", fraction: snap.sessionFraction, resetAt: snap.sessionResetAt, tint: .blue)
+                miniBar("Weekly", fraction: snap.weeklyFraction, resetAt: snap.weeklyResetAt, tint: .purple)
                 ForEach(snap.modelLimits) { model in
-                    miniBar(model.name, fraction: model.fraction, tint: .teal)
+                    miniBar(model.name, fraction: model.fraction, resetAt: model.resetAt, tint: .teal)
                 }
             } else if let error = store.errors[account.id] {
                 Text(error).font(.caption).foregroundStyle(.orange).lineLimit(1)
@@ -500,10 +564,13 @@ struct MenuContent: View {
         }
     }
 
-    private func miniBar(_ title: String, fraction: Double, tint: Color) -> some View {
+    private func miniBar(_ title: String, fraction: Double, resetAt: Date, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack {
+            HStack(spacing: 4) {
                 Text(title).font(.caption)
+                Text("· \(compactReset(resetAt))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Spacer()
                 Text(fraction, format: .percent.precision(.fractionLength(0)))
                     .font(.caption.monospacedDigit())
@@ -511,6 +578,18 @@ struct MenuContent: View {
             }
             ProgressView(value: fraction).tint(fraction >= 0.9 ? .red : tint)
         }
+    }
+
+    /// Compact "resets in 2h 5m" / "resets in 5d 7h" text for the menu.
+    private func compactReset(_ date: Date) -> String {
+        let total = Int(max(0, date.timeIntervalSince(Date())))
+        if total < 60 { return "resets now" }
+        let days = total / 86_400
+        let hours = (total % 86_400) / 3600
+        let mins = (total % 3600) / 60
+        if days >= 1 { return "resets in \(days)d \(hours)h" }
+        if hours >= 1 { return "resets in \(hours)h \(mins)m" }
+        return "resets in \(mins)m"
     }
 }
 

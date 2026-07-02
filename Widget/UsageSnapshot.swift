@@ -11,6 +11,13 @@
 
 import Foundation
 
+/// Clamps a utilization value to 0...1. Comparing with `> 0` (instead of
+/// `max(0, value)`) also normalizes -0.0 and NaN, which Swift's `max` passes
+/// through and which would render as "-0%".
+private func clamp01(_ value: Double) -> Double {
+    value > 0 ? min(1, value) : 0
+}
+
 /// A compact summary of one Claude account's subscription usage, fetched from
 /// Anthropic's unified rate-limit headers. Utilization values are fractions in
 /// 0...1 straight from Anthropic, so the percentages are authoritative.
@@ -45,13 +52,13 @@ struct UsageSnapshot: Codable, Equatable {
         var utilization: Double
         var resetAt: Date
         var id: String { name }
-        var fraction: Double { min(1, max(0, utilization)) }
+        var fraction: Double { clamp01(utilization) }
     }
 
     /// Session utilization clamped to 0...1 for progress bars.
-    var sessionFraction: Double { min(1, max(0, sessionUtilization)) }
+    var sessionFraction: Double { clamp01(sessionUtilization) }
     /// Weekly utilization clamped to 0...1 for progress bars.
-    var weeklyFraction: Double { min(1, max(0, weeklyUtilization)) }
+    var weeklyFraction: Double { clamp01(weeklyUtilization) }
 
     /// A neutral placeholder used for previews and before the first refresh.
     static var placeholder: UsageSnapshot {
@@ -71,11 +78,31 @@ struct UsageSnapshot: Codable, Equatable {
     }
 }
 
-/// One connected Claude account plus its latest usage.
+/// One connected account plus its latest usage.
 struct AccountUsage: Codable, Equatable, Identifiable {
     var id: String
     var name: String
+    /// "claude" or "codex" — which provider mark the widget shows.
+    var provider: String
     var snapshot: UsageSnapshot
+
+    init(id: String, name: String, provider: String = "claude", snapshot: UsageSnapshot) {
+        self.id = id
+        self.name = name
+        self.provider = provider
+        self.snapshot = snapshot
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, provider, snapshot }
+
+    /// Payloads written before multi-provider support have no `provider` key.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        provider = try container.decodeIfPresent(String.self, forKey: .provider) ?? "claude"
+        snapshot = try container.decode(UsageSnapshot.self, forKey: .snapshot)
+    }
 }
 
 /// Everything the app publishes to the widget: all connected accounts' usage.
@@ -141,15 +168,26 @@ enum AppGroup {
 
     private static var sharedDefaults: UserDefaults? { UserDefaults(suiteName: id) }
 
-    /// Whether to notify on 5-hour session resets. Togglable from the widget.
-    static var notifySession: Bool {
-        get { sharedDefaults?.object(forKey: "notifySession") as? Bool ?? true }
-        set { sharedDefaults?.set(newValue, forKey: "notifySession") }
+    /// Whether to notify on 5-hour session resets for one account. Togglable
+    /// from the widget's bell. Falls back to the legacy app-wide toggle, then on.
+    static func notifySession(for accountID: String) -> Bool {
+        sharedDefaults?.object(forKey: "notifySession.\(accountID)") as? Bool
+            ?? sharedDefaults?.object(forKey: "notifySession") as? Bool
+            ?? true
     }
 
-    /// Whether to notify on weekly / model-limit resets.
-    static var notifyWeekly: Bool {
-        get { sharedDefaults?.object(forKey: "notifyWeekly") as? Bool ?? true }
-        set { sharedDefaults?.set(newValue, forKey: "notifyWeekly") }
+    static func setNotifySession(_ on: Bool, for accountID: String) {
+        sharedDefaults?.set(on, forKey: "notifySession.\(accountID)")
+    }
+
+    /// Whether to notify on weekly / model-limit resets for one account.
+    static func notifyWeekly(for accountID: String) -> Bool {
+        sharedDefaults?.object(forKey: "notifyWeekly.\(accountID)") as? Bool
+            ?? sharedDefaults?.object(forKey: "notifyWeekly") as? Bool
+            ?? true
+    }
+
+    static func setNotifyWeekly(_ on: Bool, for accountID: String) {
+        sharedDefaults?.set(on, forKey: "notifyWeekly.\(accountID)")
     }
 }
