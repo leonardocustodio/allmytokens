@@ -37,12 +37,15 @@ struct AllMyTokensApp: App {
     }
 
     var body: some Scene {
+        // The app lives in the menu bar (LSUIElement): launch quietly and only
+        // show the dashboard when opened from the menu.
         Window("AllMyTokens", id: "dashboard") {
             ContentView()
                 .environment(store)
                 .task { store.start() } // idempotent; no-op if already started
         }
         .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.suppressed)
 
         MenuBarExtra {
             MenuContent()
