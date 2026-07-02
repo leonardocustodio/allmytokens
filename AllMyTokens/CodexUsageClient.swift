@@ -1,14 +1,6 @@
-//
-//  CodexUsageClient.swift
-//  AllMyTokens
-//
-//  Fetches live Codex (ChatGPT subscription) usage the same way the Codex CLI
-//  does: GET chatgpt.com/backend-api/wham/usage with the ChatGPT OAuth bearer
-//  token. The response carries the 5-hour (primary) and weekly (secondary)
-//  rate-limit windows as used percentages + reset times, plus any per-model
-//  lanes — the same shape as Anthropic's unified headers, so it maps onto the
-//  shared UsageReading.
-//
+// Fetches Codex (ChatGPT subscription) usage from GET
+// chatgpt.com/backend-api/wham/usage, the way the Codex CLI does, and maps its
+// 5-hour (primary) and weekly (secondary) windows onto the shared UsageReading.
 
 import Foundation
 
@@ -34,7 +26,6 @@ nonisolated enum CodexUsageClient {
 
     // Response shape from the Codex backend (see openai/codex backend models).
     private struct Payload: Decodable {
-        var plan_type: String?
         var rate_limit: Limits?
         var additional_rate_limits: [AdditionalLimit]?
     }
@@ -48,7 +39,6 @@ nonisolated enum CodexUsageClient {
 
     private struct Window: Decodable {
         var used_percent: Double
-        var limit_window_seconds: Double?
         var reset_after_seconds: Double?
         var reset_at: Double?
     }

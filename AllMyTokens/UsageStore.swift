@@ -1,13 +1,6 @@
-//
-//  UsageStore.swift
-//  AllMyTokens
-//
-//  Runtime coordinator for one or more connected Claude accounts. Manages
-//  "Sign in with Claude" (each login adds an account), periodically fetches live
-//  usage per account from Anthropic's rate-limit headers, publishes a combined
-//  UsagePayload to the shared App Group container, reloads the widget, and
-//  (re)schedules reset notifications.
-//
+// Runtime coordinator for connected accounts: drives OAuth logins, periodically
+// fetches per-account usage, publishes the combined UsagePayload to the App
+// Group, reloads the widget, and schedules reset notifications.
 
 import Foundation
 import AppKit
@@ -27,7 +20,6 @@ final class UsageStore {
     private(set) var errors: [String: String] = [:]
 
     private(set) var isRefreshing = false
-    private(set) var lastRefresh: Date?
 
     /// The in-progress login's authorize URL for the "Add account" sheet.
     private(set) var pendingLoginURL: URL?
@@ -166,8 +158,6 @@ final class UsageStore {
 
     func refreshAll() async { await refresh(accounts) }
 
-    func refresh(_ account: Account) async { await refresh([account]) }
-
     private func refresh(_ list: [Account]) async {
         guard !list.isEmpty, !isRefreshing else { return }
         isRefreshing = true
@@ -198,7 +188,6 @@ final class UsageStore {
                 errors[id] = error.localizedDescription
             }
         }
-        lastRefresh = Date()
         publish()
     }
 

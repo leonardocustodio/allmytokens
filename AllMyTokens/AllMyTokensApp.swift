@@ -1,10 +1,3 @@
-//
-//  AllMyTokensApp.swift
-//  AllMyTokens
-//
-//  Created by Leonardo Custodio on 02/07/26.
-//
-
 import SwiftUI
 import UserNotifications
 

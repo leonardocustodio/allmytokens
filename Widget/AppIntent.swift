@@ -1,10 +1,3 @@
-//
-//  AppIntent.swift
-//  Widget
-//
-//  Created by Leonardo Custodio on 02/07/26.
-//
-
 import WidgetKit
 import AppIntents
 
@@ -105,11 +98,9 @@ struct ConfigurationAppIntent: WidgetConfigurationIntent {
     @Parameter(title: "Account")
     var account: AccountEntity?
 
-    /// Which limit the small widget focuses on.
     @Parameter(title: "Small widget shows", default: .session)
     var metric: UsageMetric
 
-    /// Visual theme for this widget instance.
     @Parameter(title: "Theme", default: .dark)
     var theme: WidgetTheme
 }

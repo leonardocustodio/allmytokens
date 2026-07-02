@@ -1,14 +1,7 @@
-//
-//  UsageEngine.swift
-//  AllMyTokens
-//
-//  Fetches live Claude subscription usage the same way claude-usage-widget does:
-//  make one minimal `/v1/messages` call with the OAuth bearer token and read the
-//  `anthropic-ratelimit-unified-*` response headers. Those carry the exact
-//  session (5h), weekly (7d, all models) and per-model weekly (e.g. 7d_opus /
-//  7d_sonnet / a Fable bucket) utilization + reset times the subscription
-//  enforces — this is subscription auth, not API-billed usage.
-//
+// Reads Claude subscription usage from the `anthropic-ratelimit-unified-*`
+// response headers on one minimal `/v1/messages` OAuth call. Those headers
+// carry the session (5h), weekly, and per-model window utilization and reset
+// times — subscription usage, not API-billed.
 
 import Foundation
 
@@ -100,9 +93,8 @@ nonisolated enum AnthropicUsageClient {
         return parse(headers: headers, now: now)
     }
 
-    /// Pure header parsing, factored out for inspection/testing. Discovers every
-    /// `anthropic-ratelimit-unified-<claim>-utilization` header so any
-    /// per-model weekly window (Fable/Opus/Sonnet) is picked up automatically.
+    /// Discovers every `anthropic-ratelimit-unified-<claim>-utilization` header,
+    /// so any per-model weekly window (Fable/Opus/Sonnet) is picked up automatically.
     static func parse(headers: [String: String], now: Date) -> UsageReading {
         var claims: [String: WindowReading] = [:]
         for (key, value) in headers

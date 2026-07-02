@@ -1,19 +1,6 @@
-//
-//  AnthropicAuth.swift
-//  AllMyTokens
-//
-//  "Sign in with Claude" — OAuth 2.0 PKCE login against Anthropic, using the
-//  same public client Claude Code itself uses. The browser opens
-//  claude.ai/oauth/authorize; the user approves and is shown a `code#state`
-//  string to paste back; we exchange it for tokens at the console token
-//  endpoint and store them in the Keychain, refreshing with the refresh_token
-//  when they expire.
-//
-//  Note: this connects your own Claude (Pro/Max) subscription — no API key, no
-//  API billing. It reuses Claude Code's OAuth client; per Anthropic's consumer
-//  terms this credential is intended for Claude Code/Claude.ai, so treat this as
-//  a personal-use tool.
-//
+// "Sign in with Claude": OAuth 2.0 PKCE reusing Claude Code's public client.
+// The user pastes back the browser's `code#state`; tokens are kept in the
+// Keychain and refreshed on expiry. Personal Pro/Max subscription — no API key.
 
 import Foundation
 import CryptoKit

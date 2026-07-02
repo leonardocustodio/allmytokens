@@ -1,13 +1,6 @@
-//
-//  UsageSnapshot.swift
-//  AllMyTokens
-//
-//  Shared data contract between the app and the widget.
-//
-//  IMPORTANT: This file is duplicated verbatim in the Widget target
-//  (Widget/UsageSnapshot.swift). The app and widget are separate binaries,
-//  so they each compile their own copy. Keep the two files in sync.
-//
+// Shared app/widget data contract.
+// Duplicated verbatim in the Widget target (Widget/UsageSnapshot.swift) — the
+// two are separate binaries, so keep the copies in sync.
 
 import Foundation
 

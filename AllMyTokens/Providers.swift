@@ -1,13 +1,6 @@
-//
-//  Providers.swift
-//  AllMyTokens
-//
-//  The generic provider interface: one type per subscription service that
-//  knows how to connect (OAuth) and how to read quota usage. Adding a new
-//  provider means implementing UsageProvider, adding a case to
-//  AccountProvider, and listing the provider in ProviderRegistry.all —
-//  the store and the add-account UI pick it up from there.
-//
+// The generic provider interface: each subscription service implements
+// UsageProvider (OAuth connect + usage read). To add one: implement
+// UsageProvider, add an AccountProvider case, and list it in ProviderRegistry.
 
 import Foundation
 

@@ -1,12 +1,6 @@
-//
-//  Account.swift
-//  AllMyTokens
-//
-//  A connected subscription account (Claude or Codex). Tokens live in the
-//  Keychain keyed by `id`; this lightweight record (id + display name +
-//  provider) is persisted in UserDefaults so the app knows which accounts
-//  exist across launches.
-//
+// A connected subscription account (Claude or Codex). Tokens live in the
+// Keychain keyed by `id`; this record is persisted in UserDefaults so accounts
+// survive launches.
 
 import Foundation
 

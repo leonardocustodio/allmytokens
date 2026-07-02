@@ -1,18 +1,7 @@
-//
-//  OpenAIAuth.swift
-//  AllMyTokens
-//
-//  "Sign in with ChatGPT" — OAuth 2.0 PKCE login against auth.openai.com,
-//  using the same public client the Codex CLI uses. Unlike the Claude flow
-//  (which shows a code to paste), OpenAI's flow redirects the browser to
-//  http://localhost:1455/auth/callback, so we run a one-shot loopback HTTP
-//  listener for the redirect (sandbox-safe: requires the network-server
-//  entitlement, no file access outside the container).
-//
-//  Note: this connects your own ChatGPT (Plus/Pro/…) subscription — no API
-//  key, no API billing. It reuses the Codex CLI's OAuth client; treat this as
-//  a personal-use tool.
-//
+// "Sign in with ChatGPT": OAuth 2.0 PKCE against auth.openai.com reusing the
+// Codex CLI's public client. OpenAI redirects to localhost:1455/auth/callback,
+// so a one-shot loopback listener catches the callback (needs the
+// network-server entitlement). Personal ChatGPT subscription — no API key.
 
 import Foundation
 import CryptoKit

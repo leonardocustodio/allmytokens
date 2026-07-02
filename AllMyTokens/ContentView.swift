@@ -1,10 +1,3 @@
-//
-//  ContentView.swift
-//  AllMyTokens
-//
-//  Created by Leonardo Custodio on 02/07/26.
-//
-
 import SwiftUI
 
 struct ContentView: View {
@@ -56,8 +49,7 @@ struct ContentView: View {
         } header: {
             Text("Accounts")
         } footer: {
-            // The footer sits on the plain background, outside the rounded group —
-            // exactly where macOS puts its "Add Account…" button.
+            // Footer sits outside the rounded group — where macOS puts the Add button.
             if store.accounts.isEmpty {
                 Text("Connect your Claude or ChatGPT (Codex) subscription. Uses OAuth — no API key, nothing leaves your Mac except the sign-in.")
             } else {
@@ -143,8 +135,7 @@ struct AccountRow: View {
 
 // MARK: - Provider branding
 
-/// The providers the app knows about, with their real brand marks
-/// (template SVGs in the asset catalog) and official colors.
+/// Provider brand marks (template images in the asset catalog).
 enum ProviderBrand {
     case claude, codex
 
@@ -165,7 +156,6 @@ struct ProviderBadge: View {
     let brand: ProviderBrand
     var size: CGFloat = 30
 
-    // Official brand colors: Claude coral, ChatGPT teal.
     private static let claudeCoral = Color(red: 0.85, green: 0.47, blue: 0.34)
     private static let chatgptTeal = Color(red: 0.45, green: 0.67, blue: 0.61)
 

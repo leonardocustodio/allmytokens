@@ -1,12 +1,5 @@
-//
-//  Settings.swift
-//  AllMyTokens
-//
-//  User-configurable preferences. Since utilization + reset times now come
-//  straight from Anthropic's headers, there are no token-budget guesses to
-//  configure — just refresh cadence and login-item behavior. Notification
-//  toggles are per account, stored in shared App Group defaults (AppGroup).
-//
+// User preferences: refresh cadence and open-at-login. (Per-account
+// notification toggles live in shared App Group defaults — see AppGroup.)
 
 import Foundation
 import Observation
