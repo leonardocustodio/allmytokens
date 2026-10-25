@@ -19,8 +19,6 @@ final class UsageStore {
     /// Latest per-account error message (e.g. expired sign-in), if any.
     private(set) var errors: [String: String] = [:]
 
-    private(set) var isRefreshing = false
-
     /// The in-progress login's authorize URL for the "Add account" sheet.
     private(set) var pendingLoginURL: URL?
     /// Error surfaced in the add-account flow.
@@ -30,6 +28,11 @@ final class UsageStore {
 
     private var pendingLogin: (provider: any UsageProvider, login: ProviderLogin)?
     private var loopTask: Task<Void, Never>?
+    /// Accounts with a fetch in progress. Two fetches for one account can rotate
+    /// the refresh token twice, so the second fetch must not start.
+    private var inFlight: Set<String> = []
+    /// The last account data sent to the widget, without timestamps.
+    private var lastWidgetAccounts: [AccountUsage]?
     private let accountsKey = "accounts.v1"
 
     var hasAccounts: Bool { !accounts.isEmpty }
@@ -50,13 +53,51 @@ final class UsageStore {
     /// as a menu-bar item even after the dashboard window is closed.
     func start() {
         guard loopTask == nil else { return }
+        URLSession.removeLegacyDiskCache()
         Task { await requestNotificationAuthorization() }
+        startRefreshLoop(after: 0)
+    }
+
+    /// Starts a new schedule when the refresh interval changes. The short delay
+    /// lets the user click the stepper more than one time without extra fetches.
+    func restartRefreshLoop() {
+        loopTask?.cancel()
+        startRefreshLoop(after: 5)
+    }
+
+    /// Spreads the fetches across each refresh period. Each account has a fixed
+    /// slot, so with 7 accounts and 3 minutes, one account refreshes every ~26
+    /// seconds. Each account refreshes at the same offset in every period.
+    private func startRefreshLoop(after delay: TimeInterval) {
         loopTask = Task { [weak self] in
-            guard let self else { return }
+            var cycleStart = Date().addingTimeInterval(delay)
             while !Task.isCancelled {
-                if self.hasAccounts { await self.refreshAll() }
-                let minutes = self.settings.refreshMinutes
-                try? await Task.sleep(for: .seconds(max(1, minutes) * 60))
+                guard let self else { return }
+                let list = self.accounts
+                let period = TimeInterval(max(1, self.settings.refreshMinutes) * 60)
+                let slot = period / Double(max(1, list.count))
+
+                for (index, account) in list.enumerated() {
+                    var due = cycleStart.addingTimeInterval(slot * Double(index))
+                    // After a system sleep, move the schedule forward. This prevents
+                    // a burst of fetches for all the missed slots.
+                    if due.timeIntervalSinceNow < -slot {
+                        due = Date()
+                        cycleStart = due.addingTimeInterval(-slot * Double(index))
+                    }
+                    try? await Task.sleep(for: .seconds(max(0, due.timeIntervalSinceNow)))
+                    if Task.isCancelled { return }
+                    if self.accounts.contains(where: { $0.id == account.id }) {
+                        // A separate task does not receive the cancellation of
+                        // this loop, so a restart does not stop a token refresh.
+                        await Task { await self.refresh(account) }.value
+                    }
+                }
+
+                cycleStart = cycleStart.addingTimeInterval(period)
+                if list.isEmpty {
+                    try? await Task.sleep(for: .seconds(max(0, cycleStart.timeIntervalSinceNow)))
+                }
             }
         }
     }
@@ -98,13 +139,15 @@ final class UsageStore {
         guard let (provider, login) = pendingLogin else { return false }
         do {
             let id = try await provider.completeLogin(login, code: code)
-            accounts.append(Account(id: id, name: defaultAccountName(for: provider.id),
-                                    provider: provider.id))
+            let account = Account(id: id, name: defaultAccountName(for: provider.id),
+                                  provider: provider.id)
+            accounts.append(account)
             persistAccounts()
             pendingLogin = nil
             pendingLoginURL = nil
             addError = nil
-            await refreshAll()
+            // The schedule adds the new account to its next period.
+            await refresh(account)
             return true
         } catch is CancellationError {
             return false
@@ -156,50 +199,36 @@ final class UsageStore {
 
     // MARK: - Refresh
 
-    func refreshAll() async { await refresh(accounts) }
+    private func refresh(_ account: Account) async {
+        guard inFlight.insert(account.id).inserted else { return }
+        defer { inFlight.remove(account.id) }
 
-    private func refresh(_ list: [Account]) async {
-        guard !list.isEmpty, !isRefreshing else { return }
-        isRefreshing = true
-        defer { isRefreshing = false }
-
-        let results = await withTaskGroup(of: (String, Result<UsageSnapshot, Error>).self) { group in
-            for account in list {
-                group.addTask {
-                    do {
-                        let reading = try await Self.fetchReading(for: account)
-                        return (account.id, .success(Self.snapshot(from: reading)))
-                    } catch {
-                        return (account.id, .failure(error))
-                    }
-                }
-            }
-            var collected: [(String, Result<UsageSnapshot, Error>)] = []
-            for await result in group { collected.append(result) }
-            return collected
+        let result: Result<UsageSnapshot, Error>
+        do {
+            result = .success(Self.snapshot(from: try await Self.fetchReading(for: account)))
+        } catch {
+            result = .failure(error)
         }
+        // The user can sign out of the account while the fetch is in progress.
+        guard accounts.contains(where: { $0.id == account.id }) else { return }
 
-        for (id, result) in results {
-            switch result {
-            case let .success(snap):
-                usage[id] = snap
-                errors[id] = nil
-            case let .failure(error):
-                errors[id] = error.localizedDescription
-            }
+        switch result {
+        case let .success(snap):
+            usage[account.id] = snap
+            errors[account.id] = nil
+        case let .failure(error):
+            errors[account.id] = error.localizedDescription
         }
         publish()
     }
 
     /// Fetches one account's usage via its provider implementation.
-    /// `nonisolated static` so it can run inside the concurrent fetch tasks.
     nonisolated private static func fetchReading(for account: Account) async throws -> UsageReading {
         try await ProviderRegistry.provider(for: account.provider)
             .fetchUsage(accountID: account.id)
     }
 
-    /// Pure transform from a header reading to a snapshot. `nonisolated static`
-    /// so it can run inside the concurrent fetch tasks.
+    /// Pure transform from a header reading to a snapshot.
     nonisolated static func snapshot(from r: UsageReading) -> UsageSnapshot {
         UsageSnapshot(
             generatedAt: Date(),
@@ -232,7 +261,17 @@ final class UsageStore {
         let list = accountUsageList()
         let payload = UsagePayload(generatedAt: Date(), accounts: list)
         try? AppGroup.save(payload)
-        WidgetCenter.shared.reloadAllTimelines()
+        // Each account refreshes in its own slot. Reload the widget only when
+        // the data changes, because WidgetKit limits the number of reloads.
+        let widgetAccounts = list.map { entry -> AccountUsage in
+            var entry = entry
+            entry.snapshot.generatedAt = .distantPast
+            return entry
+        }
+        if widgetAccounts != lastWidgetAccounts {
+            lastWidgetAccounts = widgetAccounts
+            WidgetCenter.shared.reloadAllTimelines()
+        }
         scheduleNotifications(for: list)
     }
 

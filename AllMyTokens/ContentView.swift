@@ -30,6 +30,9 @@ struct ContentView: View {
                 store.rescheduleNotifications()
             }
         }
+        .onChange(of: store.settings.refreshMinutes) {
+            store.restartRefreshLoop()
+        }
     }
 
     // MARK: - Accounts

@@ -71,7 +71,7 @@ nonisolated enum AnthropicUsageClient {
 
         let response: URLResponse
         do {
-            (_, response) = try await URLSession.shared.data(for: request)
+            (_, response) = try await URLSession.noCache.data(for: request)
         } catch {
             throw UsageError.transport(error.localizedDescription)
         }

@@ -61,7 +61,7 @@ nonisolated enum CodexUsageClient {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await URLSession.noCache.data(for: request)
         } catch {
             throw UsageError.transport(error.localizedDescription)
         }

@@ -4,6 +4,24 @@
 
 import Foundation
 
+nonisolated extension URLSession {
+    /// A session without a disk cache. macOS terminates the app when it purges
+    /// the container caches at low disk space. An empty Caches folder prevents that.
+    static let noCache: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: config)
+    }()
+
+    /// Removes the disk cache that earlier versions wrote through URLSession.shared.
+    static func removeLegacyDiskCache() {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first,
+              let bundleID = Bundle.main.bundleIdentifier else { return }
+        try? FileManager.default.removeItem(at: caches.appendingPathComponent(bundleID))
+    }
+}
+
 /// How a provider's OAuth sign-in finishes, which drives the connect UI.
 enum ProviderLoginStyle: Sendable, Equatable {
     /// The browser shows a code the user copies and pastes back into the app.

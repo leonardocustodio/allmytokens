@@ -108,7 +108,9 @@ nonisolated enum AnthropicAuth {
             ], fallbackRefresh: tokens.refreshToken)
             try save(refreshed, for: accountID)
             return refreshed.accessToken
-        } catch {
+        } catch let AuthError.tokenExchange(status, _) where (400..<500).contains(status) {
+            // The server rejected the refresh token. Other errors (network,
+            // cancellation) keep the tokens for the next attempt.
             clear(for: accountID)
             return nil
         }
@@ -122,7 +124,7 @@ nonisolated enum AnthropicAuth {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         request.timeoutInterval = 20
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.noCache.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
             let text = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
