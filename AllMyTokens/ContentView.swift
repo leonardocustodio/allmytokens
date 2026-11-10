@@ -123,12 +123,24 @@ struct AccountRow: View {
         if let error = store.errors[account.id] {
             Text(error).font(.caption).foregroundStyle(.orange).lineLimit(1)
         } else if let snap = store.usage[account.id] {
-            Text("Session \(pct(snap.sessionFraction)) · Weekly \(pct(snap.weeklyFraction))")
+            Text(summary(snap))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
         } else {
             Text("Connecting…").font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    /// Makes the one-line summary of all limits, e.g. "Weekly 16% · Fable 4%".
+    private func summary(_ snap: UsageSnapshot) -> String {
+        var parts: [String] = []
+        if account.provider.hasSessionLimit {
+            parts.append("Session \(pct(snap.sessionFraction))")
+        }
+        parts.append("Weekly \(pct(snap.weeklyFraction))")
+        parts += snap.modelLimits.map { "\($0.name) \(pct($0.fraction))" }
+        return parts.joined(separator: " · ")
     }
 
     private func pct(_ f: Double) -> String {
@@ -410,16 +422,20 @@ struct AccountDetailView: View {
             }
 
             Section("Notifications") {
-                Toggle("Session reset alerts", isOn: $notifySession)
-                    .onChange(of: notifySession) { store.setNotifySession(notifySession, for: account) }
+                if account.provider.hasSessionLimit {
+                    Toggle("Session reset alerts", isOn: $notifySession)
+                        .onChange(of: notifySession) { store.setNotifySession(notifySession, for: account) }
+                }
                 Toggle("Weekly & model reset alerts", isOn: $notifyWeekly)
                     .onChange(of: notifyWeekly) { store.setNotifyWeekly(notifyWeekly, for: account) }
             }
 
             if let snap = snapshot, snap.hasData {
                 Section {
-                    LimitRow(title: "Current session", subtitle: "5-hour window",
-                             fraction: snap.sessionFraction, resetAt: snap.sessionResetAt, tint: .blue)
+                    if account.provider.hasSessionLimit {
+                        LimitRow(title: "Current session", subtitle: "5-hour window",
+                                 fraction: snap.sessionFraction, resetAt: snap.sessionResetAt, tint: .blue)
+                    }
                     LimitRow(title: "Weekly", subtitle: "all models · 7 days",
                              fraction: snap.weeklyFraction, resetAt: snap.weeklyResetAt, tint: .purple)
                     ForEach(snap.modelLimits) { model in
@@ -544,7 +560,9 @@ struct MenuContent: View {
                 Text(account.name).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             }
             if let snap = store.usage[account.id], snap.hasData {
-                miniBar("Session", fraction: snap.sessionFraction, resetAt: snap.sessionResetAt, tint: .blue)
+                if account.provider.hasSessionLimit {
+                    miniBar("Session", fraction: snap.sessionFraction, resetAt: snap.sessionResetAt, tint: .blue)
+                }
                 miniBar("Weekly", fraction: snap.weeklyFraction, resetAt: snap.weeklyResetAt, tint: .purple)
                 ForEach(snap.modelLimits) { model in
                     miniBar(model.name, fraction: model.fraction, resetAt: model.resetAt, tint: .teal)

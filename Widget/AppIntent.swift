@@ -26,6 +26,29 @@ struct ToggleSessionNotifyIntent: AppIntent {
     }
 }
 
+/// Interactive widget button: toggles weekly and model reset notifications for the account that the widget shows.
+/// The widget uses this button for Claude accounts, because Claude has no session limit.
+struct ToggleWeeklyNotifyIntent: AppIntent {
+    static var title: LocalizedStringResource { "Toggle weekly reset alerts" }
+
+    @Parameter(title: "Account ID")
+    var accountID: String
+
+    init() {}
+
+    init(accountID: String) {
+        self.accountID = accountID
+    }
+
+    func perform() async throws -> some IntentResult {
+        if !accountID.isEmpty {
+            AppGroup.setNotifyWeekly(!AppGroup.notifyWeekly(for: accountID), for: accountID)
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+        return .result()
+    }
+}
+
 /// Visual style of a widget instance.
 enum WidgetTheme: String, AppEnum {
     case dark
@@ -51,7 +74,7 @@ enum UsageMetric: String, AppEnum {
 
     static var caseDisplayRepresentations: [UsageMetric: DisplayRepresentation] {
         [
-            .session: "Current session (5-hour)",
+            .session: "Current session (5-hour, Codex)",
             .weekly: "Weekly (all models)",
             .model: "Model limit (e.g. Fable)",
         ]

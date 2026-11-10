@@ -1,6 +1,6 @@
 # AllMyTokens
 
-A macOS menu-bar app that shows your Claude and Codex subscription usage — the 5-hour session window, the weekly window, and per-model limits, each with its reset time.
+A macOS menu-bar app that shows your Claude and Codex subscription usage — the weekly window, per-model limits, and (for Codex) the 5-hour session window, each with its reset time.
 
 It reads the same subscription rate-limit data the official CLIs use, so there's no API key and no API billing: you sign in with your existing Claude (Pro/Max) or ChatGPT (Codex) subscription.
 

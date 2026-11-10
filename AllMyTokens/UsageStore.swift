@@ -318,7 +318,7 @@ final class UsageStore {
             let notifySession = AppGroup.notifySession(for: entry.id)
             let notifyWeekly = AppGroup.notifyWeekly(for: entry.id)
 
-            if notifySession {
+            if notifySession && entry.hasSessionLimit {
                 schedule(id: "reset.\(entry.id).session",
                          title: "\(prefix)Session limit reset",
                          body: "Your 5-hour usage window has reset.",

@@ -109,7 +109,7 @@ struct ClaudeProvider: UsageProvider {
     func fetchUsage(accountID: String) async throws -> UsageReading {
         guard let token = try await AnthropicAuth.validAccessToken(for: accountID),
               !token.isEmpty else { throw AnthropicUsageClient.UsageError.notAuthorized }
-        return try await AnthropicUsageClient.fetch(accessToken: token)
+        return try await AnthropicUsageClient.fetch(accessToken: token, accountID: accountID)
     }
 
     func signOut(accountID: String) {

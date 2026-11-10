@@ -14,6 +14,14 @@ enum AccountProvider: String, Codable, Sendable {
         case .codex: return "Codex"
         }
     }
+
+    /// True when the provider has a 5-hour session limit. Claude has only weekly limits.
+    var hasSessionLimit: Bool {
+        switch self {
+        case .claude: return false
+        case .codex: return true
+        }
+    }
 }
 
 struct Account: Identifiable, Codable, Equatable, Hashable {

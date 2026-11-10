@@ -31,8 +31,15 @@ struct Provider: AppIntentTimelineProvider {
                            accountName: selected?.name,
                            provider: selected?.provider ?? "claude",
                            accountCount: accounts.count,
-                           notifySession: selected.map { AppGroup.notifySession(for: $0.id) } ?? true,
+                           notifyOn: selected.map(notifyOn) ?? true,
                            configuration: configuration)
+    }
+
+    /// Reads the alert flag that the bell toggles. Claude has no session limit, so its bell controls weekly alerts.
+    private func notifyOn(_ account: AccountUsage) -> Bool {
+        account.hasSessionLimit
+            ? AppGroup.notifySession(for: account.id)
+            : AppGroup.notifyWeekly(for: account.id)
     }
 }
 
@@ -43,7 +50,7 @@ struct SimpleEntry: TimelineEntry {
     let accountName: String?
     let provider: String
     let accountCount: Int
-    let notifySession: Bool
+    let notifyOn: Bool
     let configuration: ConfigurationAppIntent
 }
 
@@ -132,19 +139,24 @@ private struct WidgetBackground: View {
 
 /// A single limit to render.
 private struct WidgetMetric: Identifiable {
+    let kind: UsageMetric
     let label: String
     let fraction: Double
     let resetAt: Date
     var id: String { label }
 }
 
-private func metrics(from snap: UsageSnapshot) -> [WidgetMetric] {
-    var result = [
-        WidgetMetric(label: "Current", fraction: snap.sessionFraction, resetAt: snap.sessionResetAt),
-        WidgetMetric(label: "Weekly", fraction: snap.weeklyFraction, resetAt: snap.weeklyResetAt),
-    ]
+/// Makes the list of limits to show. The session limit is in the list only when the provider has one.
+private func metrics(from snap: UsageSnapshot, includeSession: Bool) -> [WidgetMetric] {
+    var result: [WidgetMetric] = []
+    if includeSession {
+        result.append(WidgetMetric(kind: .session, label: "Current",
+                                   fraction: snap.sessionFraction, resetAt: snap.sessionResetAt))
+    }
+    result.append(WidgetMetric(kind: .weekly, label: "Weekly",
+                               fraction: snap.weeklyFraction, resetAt: snap.weeklyResetAt))
     result += snap.modelLimits.map {
-        WidgetMetric(label: $0.name, fraction: $0.fraction, resetAt: $0.resetAt)
+        WidgetMetric(kind: .model, label: $0.name, fraction: $0.fraction, resetAt: $0.resetAt)
     }
     return result
 }
@@ -207,15 +219,15 @@ struct WidgetEntryView: View {
 
     @ViewBuilder
     private func content(for snap: UsageSnapshot) -> some View {
-        let all = metrics(from: snap)
+        let all = metrics(from: snap, includeSession: entry.provider != "claude")
         switch family {
         case .systemSmall:
             SmallView(metric: focusMetric(all), now: entry.date,
-                      notifyOn: entry.notifySession, accountID: entry.accountID,
+                      notifyOn: entry.notifyOn, accountID: entry.accountID,
                       accountName: accountSubtitle, provider: entry.provider)
         case .systemMedium:
             VStack(alignment: .leading, spacing: 10) {
-                HeaderView(subtitle: accountSubtitle, notifyOn: entry.notifySession,
+                HeaderView(subtitle: accountSubtitle, notifyOn: entry.notifyOn,
                            accountID: entry.accountID, provider: entry.provider)
                 HStack(spacing: 10) {
                     ForEach(Array(all.prefix(2))) { MetricCard(metric: $0, now: entry.date) }
@@ -223,7 +235,7 @@ struct WidgetEntryView: View {
             }
         default: // large
             VStack(alignment: .leading, spacing: 10) {
-                HeaderView(subtitle: accountSubtitle, notifyOn: entry.notifySession,
+                HeaderView(subtitle: accountSubtitle, notifyOn: entry.notifyOn,
                            accountID: entry.accountID, provider: entry.provider)
                 ForEach(Array(all.prefix(3))) { MetricCard(metric: $0, now: entry.date) }
                 Spacer(minLength: 0)
@@ -237,12 +249,9 @@ struct WidgetEntryView: View {
         entry.accountCount > 1 ? entry.accountName : nil
     }
 
+    /// Finds the configured limit. If the account does not have that limit, the first limit shows.
     private func focusMetric(_ all: [WidgetMetric]) -> WidgetMetric {
-        switch entry.configuration.metric {
-        case .session: return all.first ?? all[0]
-        case .weekly:  return all.count > 1 ? all[1] : all[0]
-        case .model:   return all.count > 2 ? all[2] : all[0]
-        }
+        all.first(where: { $0.kind == entry.configuration.metric }) ?? all[0]
     }
 
     private var emptyState: some View {
@@ -280,25 +289,35 @@ private struct HeaderView: View {
                 }
             }
             Spacer()
-            NotifyBellButton(on: notifyOn, accountID: accountID)
+            NotifyBellButton(on: notifyOn, accountID: accountID, provider: provider)
         }
     }
 }
 
-/// Interactive bell that toggles this account's session-reset notifications.
+/// Interactive bell that toggles reset notifications for this account.
+/// For Codex, the bell controls session alerts. For Claude, the bell controls weekly alerts.
 private struct NotifyBellButton: View {
     @Environment(\.palette) private var palette
     let on: Bool
     let accountID: String?
+    var provider: String = "claude"
+
     var body: some View {
-        Button(intent: ToggleSessionNotifyIntent(accountID: accountID ?? "")) {
-            Image(systemName: on ? "bell.fill" : "bell.slash.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(on ? palette.lime : palette.secondary)
-                .padding(6)
-                .background(Circle().fill(palette.pill))
+        if provider == "claude" {
+            Button(intent: ToggleWeeklyNotifyIntent(accountID: accountID ?? "")) { bell }
+                .buttonStyle(.plain)
+        } else {
+            Button(intent: ToggleSessionNotifyIntent(accountID: accountID ?? "")) { bell }
+                .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
+    }
+
+    private var bell: some View {
+        Image(systemName: on ? "bell.fill" : "bell.slash.fill")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(on ? palette.lime : palette.secondary)
+            .padding(6)
+            .background(Circle().fill(palette.pill))
     }
 }
 
@@ -385,7 +404,7 @@ private struct SmallView: View {
                     }
                 }
                 Spacer()
-                NotifyBellButton(on: notifyOn, accountID: accountID)
+                NotifyBellButton(on: notifyOn, accountID: accountID, provider: provider)
             }
             Spacer(minLength: 0)
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -450,7 +469,7 @@ struct AllMyTokensWidget: Widget {
                 .containerBackground(for: .widget) { WidgetBackground(theme: entry.configuration.theme) }
         }
         .configurationDisplayName("AllMyTokens")
-        .description("Your Claude or Codex session, weekly and model limits, with reset times.")
+        .description("Your Claude or Codex usage limits, with reset times.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -461,21 +480,21 @@ struct AllMyTokensWidget: Widget {
     AllMyTokensWidget()
 } timeline: {
     SimpleEntry(date: Date(), snapshot: .placeholder, accountID: "preview", accountName: "Claude", provider: "claude",
-                accountCount: 1, notifySession: true, configuration: ConfigurationAppIntent())
+                accountCount: 1, notifyOn: true, configuration: ConfigurationAppIntent())
 }
 
 #Preview("Medium", as: .systemMedium) {
     AllMyTokensWidget()
 } timeline: {
     SimpleEntry(date: Date(), snapshot: .placeholder, accountID: "preview", accountName: "Claude", provider: "claude",
-                accountCount: 1, notifySession: true, configuration: ConfigurationAppIntent())
+                accountCount: 1, notifyOn: true, configuration: ConfigurationAppIntent())
 }
 
 #Preview("Small", as: .systemSmall) {
     AllMyTokensWidget()
 } timeline: {
     SimpleEntry(date: Date(), snapshot: .placeholder, accountID: "preview", accountName: "Claude", provider: "claude",
-                accountCount: 1, notifySession: true, configuration: ConfigurationAppIntent())
+                accountCount: 1, notifyOn: true, configuration: ConfigurationAppIntent())
 }
 
 private extension ConfigurationAppIntent {
@@ -490,5 +509,5 @@ private extension ConfigurationAppIntent {
     AllMyTokensWidget()
 } timeline: {
     SimpleEntry(date: Date(), snapshot: .placeholder, accountID: "preview", accountName: "Claude", provider: "claude",
-                accountCount: 1, notifySession: true, configuration: .themed(.light))
+                accountCount: 1, notifyOn: true, configuration: .themed(.light))
 }

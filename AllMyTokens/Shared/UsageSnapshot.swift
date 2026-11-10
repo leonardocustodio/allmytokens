@@ -79,6 +79,9 @@ struct AccountUsage: Codable, Equatable, Identifiable {
     var provider: String
     var snapshot: UsageSnapshot
 
+    /// True when the provider has a 5-hour session limit. Claude has only weekly limits.
+    var hasSessionLimit: Bool { provider != "claude" }
+
     init(id: String, name: String, provider: String = "claude", snapshot: UsageSnapshot) {
         self.id = id
         self.name = name
